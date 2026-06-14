@@ -22,3 +22,28 @@
 * получить wildcard сертификат *.lab-itmo.ru там же
 * создать DNS A запись <abc>.lab-itmo.ru  для своего статического адреса, используя curl api.beget.com
 * Сконфигурировать редирект nginx с http на https
+
+---
+
+### Установка Debian 13.x.x и настройка сети
+
+С сайта (debain.org/download)[https://www.debian.org/download] скачаем iso Образ Debian 13.5.0. Поднимем ВМ в VirualBox и в настройках сети виртуальной мащины прокинем Сетвой мост.
+
+<img width="1920" height="1037" alt="image" src="https://github.com/user-attachments/assets/35cb7e60-ea99-44b2-ba5e-e22a7eadc9f3" />
+
+В самой виртуальной мащине переходим по пути `/etc/systemd/network/` и создаем конфиг файл для сетевого интерфейса enp0s8:
+
+```
+[Match]
+Name=enp0s8
+
+[Network]
+Address=192.168.0.111/24
+Gateway=192.168.0.1
+DNS=8.8.8.8
+DNS=1.1.1.1
+```
+
+Далее командой `ip -a` проверяем конфигурацию сетевых интерфейсов и на рабочем хосте пропингуем виртуальную машину:
+
+<img width="1280" height="800" alt="image" src="https://github.com/user-attachments/assets/d43355b8-ed4e-40e7-b196-0e1f2d96a9f1" />
