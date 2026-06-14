@@ -247,7 +247,7 @@ server {
 
 ### Этапы выполнения.
 
-1. Установить корневой сертификат Минцифры (https://www.gosuslugi.ru/crt)[https://www.gosuslugi.ru/crt] в локальное хранилище Debian. Проверить получение токена через `curl -X POST "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"`. 
+1. Установить корневой сертификат Минцифры [https://www.gosuslugi.ru/crt](https://www.gosuslugi.ru/crt) в локальное хранилище Debian. Проверить получение токена через `curl -X POST "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"`. 
 
 2.	Создать файл `/etc/secrets/gigachat.key` с переменной `AUTH_KEY` равной корпоративному ключу авторизации Сбер и атрибутом 600. Создать папку `/usr/local/etc/nginx/`, в ней создать файл `<abc>-lm-studio.conf` с личным токеном студента в формате переменной nginx и атрибутом 600. 
 
@@ -284,3 +284,463 @@ server {
 
 
 ---
+
+### Установка корневых сертификатов Минцифры
+
+По инструкции на сайте [https://www.gosuslugi.ru/crt](https://www.gosuslugi.ru/crt) скачиваем сертификаты, распаковываем их и переносим в `/usr/local/share/ca-certificates/` и выполяем команду `update-ca-certificates`.
+
+### Создание секретного ключа
+
+Переходим на (developers.sber.ru)[https://developers.sber.ru/dev], регистрируемся, переходим в профиль, создаем новый провет GigaChat и для доступа к API генерируем Authorization Key.
+
+Полученный ключ сохраним в виде переменной в файле `/etc/secrets/gigachat.key`:
+
+```
+chmod 600 /etc/secrets/gigachat.key
+chown root:root /etc/secrets/gigachat.key
+```
+
+### Скрипт генерации api-токена
+
+По пути `/var/local/bin/` создаем скрипт `generate-token.sh` 
+
+```
+#!/bin/bash
+
+# Путь к nginx-конфигурации, в которую будет записан токен GigaChat
+TOKEN_FILE="/usr/local/etc/nginx/gigachat.conf"
+
+# Временный файл для сохранения ответа API в формате JSON
+TMP_FILE="/tmp/gigachat_token.json"
+
+# Подключение файла с переменной AUTH_KEY
+source /etc/secrets/gigachat.key
+
+# Генерация уникального идентификатора запроса
+UUID=$(uuidgen)
+
+# Запрос нового токена доступа к API GigaChat
+curl -s -X POST \
+  "https://ngw.devices.sberbank.ru:9443/api/v2/oauth" \
+  -H "Authorization: Basic ${AUTH_KEY}" \
+  -H "RqUID: ${UUID}" \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "scope=GIGACHAT_API_PERS" \
+  > "${TMP_FILE}"
+
+# Вывод полученного JSON в консоль для контроля
+cat "${TMP_FILE}"
+
+# Извлечение поля access_token из JSON с помощью jq
+TOKEN=$(jq -r '.access_token' "${TMP_FILE}")
+
+# Проверка успешности получения токена
+if [ -z "${TOKEN}" ] || [ "${TOKEN}" = "null" ]; then
+    echo "ERROR: token not received"
+    exit 1
+fi
+
+# Создание nginx-переменной с новым токеном
+cat > "${TOKEN_FILE}" <<EOF
+set \$gigachat_token "${TOKEN}";
+EOF
+
+# Назначение владельца root
+chown root:root "${TOKEN_FILE}"
+
+# Установка прав доступа 600
+chmod 600 "${TOKEN_FILE}"
+
+# Проверка корректности конфигурации nginx
+# и применение новой конфигурации без остановки сервера
+nginx -t && systemctl reload nginx
+
+# Удаление временного файла
+rm -f "${TMP_FILE}"
+```
+
+### Systemd service 
+
+
+
+```
+[Unit]
+Description=Get SberBank GigaChat Token
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/secrets/gigachat.key
+ExecStart=/usr/local/bin/generate-token.sh
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Systemd timer
+
+```
+[Unit]
+Description=Run GigaChat token update every 20 minutes
+
+[Timer]
+OnBootSec=2sec
+OnUnitActiveSec=20min
+Unit=get-token-gigachat.service
+
+[Install]
+WantedBy=timers.target
+```
+
+---
+
+```
+# Для того чтобы все заработало выполяем команды:
+systemctl daemon-reload
+systemctl enable --now get-token-andrz.timer
+```
+
+### Настройка Nginx
+
+В конфигурацию нашего сайта добавляем пару новых `location` и `include`:
+
+```
+...
+
+   include /usr/local/etc/nginx/*.conf;
+
+...
+
+   location /api/chat {
+        proxy_pass https://gigachat.devices.sberbank.ru/api/v1/chat/completions;
+        proxy_ssl_server_name on;
+
+        proxy_set_header Authorization "Bearer $gigachat_token";
+        proxy_set_header Content-Type "application/json";
+        proxy_buffering off;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 600s;
+        proxy_connect_timeout 600s;
+   }
+
+    location /api/models {
+       proxy_pass https://gigachat.devices.sberbank.ru/api/v1/models;
+
+       proxy_ssl_server_name on;
+
+       proxy_set_header Authorization "Bearer $gigachat_token";
+       proxy_set_header Content-Type "application/json";
+
+       proxy_buffering off;
+   }
+```
+
+### WEB-морда
+
+Для взаимодействия с моделью GigaChat была разработана HTML-страница Gigachat Proxy, предоставляющая минималистичный веб-интерфейс для отправки запросов к модели через настроенный nginx-прокси.
+
+Основные возможности
+
+* Получение списка доступных моделей через endpoint /api/models.
+* Выбор модели из выпадающего списка.
+* Ввод пользовательского запроса в текстовое поле.
+* Отправка запроса к модели через endpoint /api/chat.
+* Поддержка потоковой передачи ответа (Streaming), что позволяет отображать текст по мере его генерации моделью.
+* Вывод статуса выполнения операций (загрузка моделей, отправка запроса, завершение генерации, ошибки).
+* Обработка ошибок при обращении к API.
+
+```
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Gigachat Proxy</title>
+
+...
+
+</script>
+
+</body>
+</html>
+```
+
+
+### Отчетные результаты
+
+> Скриншоты вывода команды curl -Iv https://ngw.devices.sberbank.ru:9443
+
+<img width="921" height="692" alt="image" src="https://github.com/user-attachments/assets/07a27a9a-70ee-4d4f-b292-a4e506e84c63" />
+
+> Содержимое папки /usr/local/etc/nginx/ - файл с токеном Сбер и файл с личным токеном студента
+
+> <img width="1240" height="199" alt="image" src="https://github.com/user-attachments/assets/ea6bbc3b-6973-4d8c-aa0c-6d200cb82aef" />
+
+> Файл скрипта usr/local/bin/token-script-<abc>.sh
+
+<img width="549" height="597" alt="image" src="https://github.com/user-attachments/assets/237d2578-497e-4d12-aaca-b91c6228bb3c" />
+
+>	Unit-файлы get-token-<abc>.service и get-token-<abc>.timer
+
+<img width="628" height="486" alt="image" src="https://github.com/user-attachments/assets/bb972a10-c263-4371-ab35-c28aa2540fcf" />
+
+> Скриншот вывода systemctl status get-token-<abc>
+
+<img width="1123" height="291" alt="image" src="https://github.com/user-attachments/assets/1ae7b104-ca15-4bb5-a0e9-bf552a1c6ac1" />
+
+> Скриншот вывода systemctl list-timers
+
+<img width="1146" height="299" alt="image" src="https://github.com/user-attachments/assets/a64869f9-a3f9-4c05-8675-f08ea2d6a948" />
+
+> Конфигурационный файл /etc/nginx/sites-available/<abc>.lab-itmo.ru
+
+<img width="839" height="897" alt="image" src="https://github.com/user-attachments/assets/7c905eb8-69ab-480e-a183-ba2ad9defb60" />
+
+> Файлы HTML страницы для работы с моделями
+
+```
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Gigachat Proxy</title>
+
+<style>
+:root {
+    --bg: #0b0c10;
+    --panel: #15171c;
+    --panel2: #1c1f26;
+    --text: #e6e6e6;
+    --muted: #a1a1aa;
+    --accent: #f97316;
+    --border: #2a2d36;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.container {
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 24px;
+    background: var(--panel);
+    border-radius: 12px;
+    box-shadow: 0 0 30px rgba(0,0,0,0.5);
+}
+
+h1 {
+    text-align: center;
+    color: var(--accent);
+    margin-bottom: 20px;
+}
+
+select, textarea {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 10px;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel2);
+    color: var(--text);
+    outline: none;
+}
+
+textarea {
+    height: 140px;
+    resize: vertical;
+}
+
+button {
+    background: var(--accent);
+    border: none;
+    color: #111;
+    padding: 10px 14px;
+    margin-top: 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: 0.2s;
+}
+
+button:hover {
+    opacity: 0.9;
+}
+
+pre {
+    background: #0a0b0f;
+    padding: 15px;
+    border-radius: 10px;
+    margin-top: 15px;
+    white-space: pre-wrap;
+    border: 1px solid var(--border);
+    min-height: 140px;
+}
+
+.status {
+    font-size: 12px;
+    color: var(--muted);
+    margin-left: 10px;
+    transition: opacity 0.5s ease;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>Gigachat Proxy</h1>
+
+<button onclick="loadModels()">Get Models</button>
+<span class="status" id="status"></span>
+
+<select id="models"></select>
+
+<textarea id="prompt" placeholder="Enter your request..."></textarea>
+
+<button onclick="ask()">Send</button>
+
+<pre id="answer">Response will appear here...</pre>
+
+</div>
+
+<script>
+
+function setStatus(msg, timeout = 3000) {
+    const el = document.getElementById("status");
+    el.innerText = msg;
+    el.style.opacity = "1";
+
+    setTimeout(() => {
+        el.style.opacity = "0";
+    }, timeout);
+}
+
+async function loadModels() {
+    try {
+        setStatus("Loading models...");
+
+        const response = await fetch("/api/models");
+        if (!response.ok) throw new Error("HTTP " + response.status);
+
+        const data = await response.json();
+
+        let models = document.getElementById("models");
+        models.innerHTML = "";
+
+        if (!data.data) throw new Error("Bad API response");
+
+        data.data.forEach(m => {
+            let opt = document.createElement("option");
+            opt.value = m.id;
+            opt.text = m.id;
+            models.appendChild(opt);
+        });
+
+        setStatus("Models loaded");
+
+    } catch (e) {
+        setStatus("Error loading models");
+        document.getElementById("answer").innerText = e.message;
+    }
+}
+
+async function sendRequest(payload) {
+    return fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    });
+}
+
+async function ask() {
+    try {
+        setStatus("Streaming...");
+
+        const model = document.getElementById("models").value;
+        const text = document.getElementById("prompt").value;
+
+        const response = await sendRequest({
+            model,
+            stream: true,
+            messages: [{ role: "user", content: text }]
+        });
+
+        if (!response.ok) throw new Error("HTTP " + response.status);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+
+        let result = "";
+        document.getElementById("answer").innerText = "";
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+
+            for (let line of chunk.split("\n")) {
+                if (!line.startsWith("data:")) continue;
+
+                let jsonStr = line.replace("data:", "").trim();
+
+                if (jsonStr === "[DONE]") {
+                    setStatus("Done");
+                    return;
+                }
+
+                try {
+                    let data = JSON.parse(jsonStr);
+                    let token = data.choices?.[0]?.delta?.content;
+
+                    if (token) {
+                        result += token;
+                        document.getElementById("answer").innerText = result;
+                    }
+                } catch {}
+            }
+        }
+
+        setStatus("Done");
+
+    } catch (e) {
+        setStatus("Error");
+        document.getElementById("answer").innerText = e.message;
+    }
+}
+
+</script>
+
+</body>
+</html>
+```
+
+> Скриншоты браузера с выводом списка доступных моделей
+
+<img width="1280" height="802" alt="image" src="https://github.com/user-attachments/assets/9b2f8c13-f3a3-489b-98f5-79852ac4202d" />
+
+
+> Скриншоты браузера с ответами чат-бота на запрос «В чем разница обучения студентов с преподавателем или без» в обеих моделях
+
+<img width="1276" height="808" alt="image" src="https://github.com/user-attachments/assets/d7947367-0bfb-4cf7-baad-3b19c034bc1a" />
+
+## Выводы
+
+В ходе выполнения лабораторной работы были получены практические навыки администрирования Linux-серверов и развертывания веб-сервисов в корпоративной инфраструктуре.
+
+В первой части работы была выполнена установка и базовая настройка операционной системы Debian, настроена статическая IP-адресация, удалённый доступ по SSH и защита сервера с использованием Fail2Ban. Был развернут веб-сервер Nginx, настроен виртуальный хост на собственном домене, организовано ведение журналов доступа и ошибок, а также получен и установлен SSL-сертификат Let's Encrypt для обеспечения защищённого HTTPS-соединения.
+
+Во второй части работы был реализован механизм автоматического получения и обновления токена доступа для сервиса GigaChat с использованием Bash-скрипта, Systemd Service и Systemd Timer. Настроено безопасное хранение секретных данных с ограничением прав доступа. На базе Nginx был реализован обратный прокси-сервер для взаимодействия с внешними LLM-сервисами через единый корпоративный веб-интерфейс.
+
+Дополнительно была разработана веб-страница для работы с языковой моделью GigaChat. Реализовано получение списка доступных моделей через API, отправка пользовательских запросов и потоковый вывод ответа в режиме реального времени. Интерфейс был оформлен с использованием современных HTML, CSS и JavaScript технологий.
+
+В результате выполнения лабораторной работы были освоены принципы настройки веб-серверов, работы с SSL-сертификатами, автоматизации задач средствами Systemd, взаимодействия с REST API, организации обратного проксирования и создания пользовательских веб-интерфейсов для работы с системами искусственного интеллекта.
