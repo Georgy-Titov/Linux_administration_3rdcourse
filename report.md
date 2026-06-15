@@ -291,7 +291,7 @@ server {
 
 ### Создание секретного ключа
 
-Переходим на (developers.sber.ru)[https://developers.sber.ru/dev], регистрируемся, переходим в профиль, создаем новый провет GigaChat и для доступа к API генерируем Authorization Key.
+Переходим на [developers.sber.ru](https://developers.sber.ru/dev), регистрируемся, переходим в профиль, создаем новый провет GigaChat и для доступа к API генерируем Authorization Key.
 
 Полученный ключ сохраним в виде переменной в файле `/etc/secrets/gigachat.key`:
 
