@@ -121,7 +121,7 @@ server {
 
 1. `certbot certonly \ --manual \ --preferred-challenges dns \ -d tgk.lab-itmo.ru` - для того чтобы получить сертификат выполняем данную команду. После выполнения в консоли выведется справочная информация и токе. Он нам и понадобиться дальше. 
 
-2. В соседнем терминале надо исполнить команду `curl "https://api.beget.com/api/dns/changeRecords?login=<<login>>&passwd=<<pass>>&input_format=json&output_format=json&input_data=%7B%22fqdn%22%3A%22_acme-challenge.andrz.lab-itmo.ru%22%2C%22records%22%3A%7B%22TXT%22%3A%5B%7B%22priority%22%3A10%2C%22value%22%3A%22<<token>>%22%7D%5D%7D%7D"`.
+2. В соседнем терминале надо исполнить команду `curl "https://api.beget.com/api/dns/changeRecords?login=<<login>>&passwd=<<pass>>&input_format=json&output_format=json&input_data=%7B%22fqdn%22%3A%22_acme-challenge.tgk.lab-itmo.ru%22%2C%22records%22%3A%7B%22TXT%22%3A%5B%7B%22priority%22%3A10%2C%22value%22%3A%22<<token>>%22%7D%5D%7D%7D"`.
 
 * **login** и **pass** берем из задания лабораторной работы, **token** получаем из команды выше.
 
@@ -401,7 +401,7 @@ WantedBy=timers.target
 ```
 # Для того чтобы все заработало выполяем команды:
 systemctl daemon-reload
-systemctl enable --now get-token-andrz.timer
+systemctl enable --now get-token-tgk.timer
 ```
 
 ### Настройка Nginx
