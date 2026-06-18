@@ -27,7 +27,7 @@
 
 ### Установка Debian 13.x.x и настройка сети
 
-С сайта (debain.org/download)[https://www.debian.org/download] скачаем iso Образ Debian 13.5.0. Поднимем ВМ в VirualBox и в настройках сети виртуальной мащины прокинем Сетвой мост.
+С сайта [debain.org/download](https://www.debian.org/download) скачаем iso Образ Debian 13.5.0. Поднимем ВМ в VirualBox и в настройках сети виртуальной мащины прокинем Сетвой мост.
 
 <img width="1920" height="1037" alt="image" src="https://github.com/user-attachments/assets/35cb7e60-ea99-44b2-ba5e-e22a7eadc9f3" />
 
